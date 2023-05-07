@@ -6,6 +6,11 @@ echo "Searching for repositories in user $username's GitHub account..."
 
 repositories=$(curl -s "https://api.github.com/users/$username/repos?per_page=1000" | grep -oP '(?<="name":")[^"]+')
 
+if [ -z "$repositories" ]; then
+  echo "No repositories found for user $username."
+  exit 1
+fi
+
 echo "Found the following repositories:"
 echo "$repositories"
 
