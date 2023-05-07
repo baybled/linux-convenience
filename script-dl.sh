@@ -1,39 +1,86 @@
 #!/bin/bash
 
-username=${1:-baybled}
+# Set default username if none provided
+username=${1:-"baybled"}
 
-echo "Searching for repositories in user $username's GitHub account..."
+# Initialize variables
+response=""
+url="https://api.github.com/users/$username/repos"
+declare -a paths=("$url")
 
-repositories=$(curl -s "https://api.github.com/users/$username/repos?per_page=1000" | grep -oP '(?<="name":")[^"]+')
+# Define function to list contents of a directory
+function list_contents {
+  local contents=($(ls -p $1 | grep -v /))
+  if [[ ${#contents[@]} -eq 0 ]]; then
+    echo "No files found."
+    return 1
+  fi
 
-if [ -z "$repositories" ]; then
-  echo "No repositories found for user $username."
-  exit 1
-fi
+  echo "Choose a file to download (or enter 'back' to go up a level):"
+  for i in "${!contents[@]}"; do
+    printf "%s\t%s\n" "$i" "${contents[$i]}"
+  done
+}
 
-echo "Found the following repositories:"
-echo "$repositories"
+# Define function to traverse directories
+function traverse_directory {
+  local path="${paths[-1]}"
+  local response
 
-read -p "Enter the number of the repository you want to download from: " repository_number
-repository=$(echo "$repositories" | sed -n "${repository_number}p")
+  while [[ -n "$path" ]]; do
+    local contents=($(curl -s "$path" | jq -r '.[] | select(.type == "dir") | .name'))
 
-echo "Searching for bash scripts in repository $repository..."
+    if [[ ${#contents[@]} -eq 0 ]]; then
+      echo "No directories found at this level."
+    else
+      echo "Choose a directory to enter (or enter 'back' to go up a level):"
+      for i in "${!contents[@]}"; do
+        printf "%s\t%s\n" "$i" "${contents[$i]}"
+      done
 
-files=$(curl -s "https://api.github.com/repos/$username/$repository/contents" | jq -r '.[] | select(.type == "file" and .name | endswith(".sh")) | .name')
+      read -r response
+      if [[ "$response" == "back" ]]; then
+        paths=("${paths[@]:0:${#paths[@]}-1}")
+        continue
+      fi
 
-echo "Found the following bash script files:"
-echo "$files"
+      local selection=${contents[$response]}
+      if [[ -n "$selection" ]]; then
+        path="$path/$selection"
+        paths+=("$path")
+      else
+        echo "Invalid selection."
+      fi
+    fi
 
-read -p "Enter the number of the file you want to download: " file_number
-file=$(echo "$files" | sed -n "${file_number}p")
+    list_contents "$(echo $path | cut -d'/' -f5-)"
+    read -r response
 
-echo "Downloading file $file..."
+    if [[ "$response" == "back" ]]; then
+      paths=("${paths[@]:0:${#paths[@]}-1}")
+      continue
+    fi
 
-curl -s "https://raw.githubusercontent.com/$username/$repository/master/$file" -o "$file"
-chmod +x "$file"
+    local filename="${contents[$response]}"
+    if [[ -n "$filename" ]]; then
+      echo "Downloading file: $filename"
+      curl -s -O "$url/$filename"
+      chmod +x "$filename"
+      read -p "Run file now? (y/n) " run_file
+      if [[ "$run_file" == "y" ]]; then
+        ./"$filename"
+      fi
+      return 0
+    fi
 
-read -p "Do you want to run the script now? (y/n) " run_now
+    echo "Invalid selection."
+  done
+}
 
-if [ "$run_now" == "y" ]; then
-    "./$file"
-fi
+# Call function to start traversal
+traverse_directory
+
+# Display current directory structure
+tree_output=$(tree -d "$username" | sed 's/[0-9]* directories, [0-9]* files//')
+echo -e "\nCurrent directory structure:"
+echo "$tree_output"
