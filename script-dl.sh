@@ -1,85 +1,74 @@
 #!/bin/bash
 
-# Define function to handle user input
-function handle_input {
-  local input=$1
-  if [[ $input == "b" ]]; then
-    # Move back one directory
-    path=$(dirname "$path")
-  elif [[ $input =~ ^[0-9]+$ ]]; then
-    # Check if selection is a directory
-    local selection=${choices[$input]}
-    local selection_url=${urls[$input]}
-    if [[ $selection == */ ]]; then
-      # Move into selected directory
-      path=$path/$selection
-      # Download HTML content of selected directory
-      local content=$(curl -s $selection_url)
-      # Parse links to find subdirectories and files
-      parse_links "$content"
-    else
-      # Download selected file
-      echo "Downloading $selection..."
-      curl -O $selection_url
-      # Make file executable
-      chmod +x $selection
-      # Ask if user wants to run file now
-      read -p "Do you want to run $selection now? (y/n): " choice
-      case "$choice" in 
-        y|Y ) ./$selection;;
-        n|N ) echo "Okay, exiting...";;
-        * ) echo "Invalid choice. Exiting...";;
-      esac
-      # Move back to previous directory
-      path=$(dirname "$path")
-    fi
-  else
-    echo "Invalid input, please try again."
-  fi
+# Define the function for fetching the files
+function fetch_files() {
+    url="https://raw.githubusercontent.com/$1/$2/$3"
+    curl -sSL $url
 }
 
-# Define function to parse links in HTML content
-function parse_links {
-  local content=$1
-  # Clear arrays
-  unset choices urls
-  # Find links to subdirectories and files
-  local links=$(echo "$content" | grep -Eo 'href="[^"]+"' | cut -d'"' -f2)
-  for link in $links; do
-    if [[ $link == */ ]]; then
-      # Add subdirectory to choices array
-      choices+=("${link%/}/")
-      urls+=("$path/$link")
-    elif [[ $link == *.sh ]]; then
-      # Add script file to choices array
-      choices+=("$link")
-      urls+=("$path/$link")
-    fi
-  done
+# Define the function for displaying the files in a tree-like structure
+function tree() {
+    local path="$1"
+    local indent="${2:-}"
+    local items=$(ls -a "$path")
+    for item in $items; do
+        if [[ $item == "." || $item == ".." ]]; then
+            continue
+        fi
+        echo "${indent}${item}"
+        if [[ -d "$path/$item" ]]; then
+            tree "$path/$item" "${indent}    "
+        fi
+    done
 }
 
-# Set default username
-username="baybled"
-# Set starting path
-path="https://github.com/$username"
+# Set the default username to "baybled"
+username=${1:-baybled}
 
-echo "Welcome to the Github Repository Browser!"
-echo "Type the number of a choice to navigate or 'b' to go back."
-echo
+# Initialize the repository list
+repositories=$(curl -sSL "https://github.com/$username?tab=repositories" | grep -oP "(?<=href=\"/).+?(?=\")" | grep -v -E "(stargazers|forks)")
 
+# Initialize the current directory as the top-level directory
+current_dir=""
+
+# Enter the main loop
 while true; do
-  # Download HTML content of current directory
-  local content=$(curl -s $path)
-  # Parse links to find subdirectories and files
-  parse_links "$content"
-  # Print current location
-  echo "Current Location: ${path#https://github.com/}"
-  # Print choices
-  for i in "${!choices[@]}"; do
-    echo "[$i] ${choices[$i]}"
-  done
-  # Get user input
-  read -p "Enter selection: " input
-  # Handle user input
-  handle_input "$input"
+    # Display the current directory
+    echo -e "\nCurrent directory: $current_dir\n"
+
+    # Display the repositories
+    i=1
+    for repository in $repositories; do
+        if [[ -z "$current_dir" ]]; then
+            echo "  $i. $repository"
+        else
+            echo "  $i. .."
+            tree_output=$(tree "$current_dir" "    ")
+            if [[ -n "$tree_output" ]]; then
+                echo "$tree_output"
+            else
+                echo "    (empty)"
+            fi
+            break
+        fi
+        let i++
+    done
+
+    # Read the user's choice
+    read -p "Enter your choice: " choice
+
+    # Handle the user's choice
+    if [[ -z "$current_dir" && "$choice" =~ ^[0-9]+$ && $choice -ge 1 && $choice -le $(echo $repositories | wc -w) ]]; then
+        current_dir=$(fetch_files "$username" $(echo $repositories | cut -d " " -f $choice)/HEAD/)
+    elif [[ -n "$current_dir" && "$choice" == "1" ]]; then
+        current_dir=$(dirname "$current_dir")
+    elif [[ -n "$current_dir" && "$choice" =~ ^[0-9]+$ && $choice -ge 2 && $choice -le $(ls -a "$current_dir" | grep -v "^\.\.$" | wc -l) ]]; then
+        file=$(ls -a "$current_dir" | grep -v "^\.\.$" | sed "${choice}q;d")
+        fetch_files "$username" "$(echo $current_dir | cut -d "/" -f 2-)/$file"
+        chmod +x "$file"
+        read -p "Do you want to run the file now? (y/n) " run
+        if [[ "$run" == "y" ]]; then
+            ./"$file"
+        fi
+    fi
 done
