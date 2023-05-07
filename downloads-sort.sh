@@ -26,10 +26,6 @@ done
 font_dirs=$(find "$source_dir" \( -iname '*.sf2' -o -iname '*.sfz' \) -type f -printf '%h\n' | sort -u)
 
 # Loop through each font directory and move it to the destination directory
-# Find all directories containing .sfz/.sf2 files
-font_dirs=$(find "$source_dir" \( -iname '*.sf2' -o -iname '*.sfz' \) -type f -printf '%h\n' | sort -u)
-
-# Loop through each font directory and move it to the destination directory
 for font_dir in $font_dirs; do
     # Only move the directory if it's not already in the destination directory
     if [ "$destination_dir" != "$font_dir" ]; then
