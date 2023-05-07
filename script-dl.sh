@@ -1,74 +1,59 @@
 #!/bin/bash
 
-# Define the function for fetching the files
-function fetch_files() {
-    url="https://raw.githubusercontent.com/$1/$2/$3"
-    curl -sSL $url
-}
+username=${1:-"baybled"}
 
-# Define the function for displaying the files in a tree-like structure
-function tree() {
-    local path="$1"
-    local indent="${2:-}"
-    local items=$(ls -a "$path")
-    for item in $items; do
-        if [[ $item == "." || $item == ".." ]]; then
-            continue
-        fi
-        echo "${indent}${item}"
-        if [[ -d "$path/$item" ]]; then
-            tree "$path/$item" "${indent}    "
-        fi
-    done
-}
-
-# Set the default username to "baybled"
-username=${1:-baybled}
-
-# Initialize the repository list
-repositories=$(curl -sSL "https://github.com/$username?tab=repositories" | grep -oP "(?<=href=\"/).+?(?=\")" | grep -v -E "(stargazers|forks)")
-
-# Initialize the current directory as the top-level directory
-current_dir=""
-
-# Enter the main loop
-while true; do
-    # Display the current directory
-    echo -e "\nCurrent directory: $current_dir\n"
-
-    # Display the repositories
-    i=1
-    for repository in $repositories; do
-        if [[ -z "$current_dir" ]]; then
-            echo "  $i. $repository"
-        else
-            echo "  $i. .."
-            tree_output=$(tree "$current_dir" "    ")
-            if [[ -n "$tree_output" ]]; then
-                echo "$tree_output"
-            else
-                echo "    (empty)"
-            fi
-            break
-        fi
-        let i++
-    done
-
-    # Read the user's choice
-    read -p "Enter your choice: " choice
-
-    # Handle the user's choice
-    if [[ -z "$current_dir" && "$choice" =~ ^[0-9]+$ && $choice -ge 1 && $choice -le $(echo $repositories | wc -w) ]]; then
-        current_dir=$(fetch_files "$username" $(echo $repositories | cut -d " " -f $choice)/HEAD/)
-    elif [[ -n "$current_dir" && "$choice" == "1" ]]; then
-        current_dir=$(dirname "$current_dir")
-    elif [[ -n "$current_dir" && "$choice" =~ ^[0-9]+$ && $choice -ge 2 && $choice -le $(ls -a "$current_dir" | grep -v "^\.\.$" | wc -l) ]]; then
-        file=$(ls -a "$current_dir" | grep -v "^\.\.$" | sed "${choice}q;d")
-        fetch_files "$username" "$(echo $current_dir | cut -d "/" -f 2-)/$file"
+get_files() {
+  local path="$1"
+  local files=($(curl -sSL "https://github.com$path" | grep -oP "(?<=href=\").*?(?=\")" | grep -E "^/$username/.+\.(sh|bash|zsh)$"))
+  if [ ${#files[@]} -eq 0 ]; then
+    echo "No executable files found in this directory."
+  else
+    PS3="Select a file to download and run (or 'b' to go back): "
+    select file in "${files[@]}"; do
+      if [ "$file" == "" ]; then
+        echo "Invalid choice!"
+      elif [ "$file" == "b" ]; then
+        break
+      else
+        echo "Downloading file $file..."
+        curl -sSL "https://raw.githubusercontent.com$path/$file" -o "$file"
         chmod +x "$file"
-        read -p "Do you want to run the file now? (y/n) " run
-        if [[ "$run" == "y" ]]; then
-            ./"$file"
+        read -p "File downloaded successfully. Do you want to run it now? (y/n) " choice
+        case "$choice" in
+          y|Y ) ./"$file"; break;;
+          n|N ) break;;
+          * ) echo "Invalid choice!";;
+        esac
+      fi
+    done
+  fi
+}
+
+PS3="Select a repository to explore (or 'q' to quit): "
+while true; do
+  repositories=$(curl -sSL "https://github.com/$username?tab=repositories" | grep -oP "(?<=href=\"/).+?(?=/\")" | grep -v -E "(stargazers|forks)" | uniq)
+  if [ -z "$repositories" ]; then
+    echo "No repositories found for user $username"
+    exit 1
+  fi
+  select repository in $repositories; do
+    if [ "$repository" == "" ]; then
+      echo "Invalid choice!"
+    elif [ "$repository" == "q" ]; then
+      exit 0
+    else
+      path="/$repository"
+      echo "$path"
+      while true; do
+        get_files "$path"
+        if [ "$path" == "/"$repository"" ]; then
+          break
+        else
+          path=$(dirname "$path")
+          echo "$path"
         fi
+      done
+      break
     fi
+  done
 done
