@@ -1,83 +1,85 @@
 #!/bin/bash
 
-echo "Welcome to the GitHub repository downloader!"
-
-# Prompt user for a username
-read -p "Please enter a GitHub username (default: baybled): " username
-username=${username:-baybled}
-
-# Define function to handle repository traversal
-function traverse_repos() {
-    local current_dir="$1"
-    local path="$2"
-    local repo_index=0
-    local repo_array=()
-    local file_array=()
-    local current_path="${path}/${current_dir}"
-    
-    # Print current location
-    echo -e "\nCurrent path: ${current_path}\n"
-    
-    # Get a list of directories and files in the current directory
-    local dir_list=$(ls -d ${current_dir}/*/ 2>/dev/null)
-    local file_list=$(ls ${current_dir}/*.sh 2>/dev/null)
-    
-    # Add a "go back" option if not in the top-level directory
-    if [[ "${current_dir}" != "${username}" ]]; then
-        let "repo_index+=1"
-        repo_array[${repo_index}]="../"
-    fi
-    
-    # Add each repository in the current directory to the list
-    for dir in ${dir_list}; do
-        let "repo_index+=1"
-        repo_array[${repo_index}]=$(basename ${dir})
-    done
-    
-    # Add each file in the current directory to the list
-    for file in ${file_list}; do
-        let "file_index+=1"
-        file_array[${file_index}]=$(basename ${file})
-    done
-    
-    # Print the list of repositories
-    echo "Please select a repository to explore:"
-    for index in ${!repo_array[@]}; do
-        echo "${index}. ${repo_array[${index}]}"
-    done
-    
-    # Print the list of files
-    echo "Please select a file to download:"
-    for index in ${!file_array[@]}; do
-        echo "${index}. ${file_array[${index}]}"
-    done
-    
-    # Prompt user to choose an option
-    read -p "Enter a number to make a selection, or 'q' to quit: " selection
-    
-    # Handle user's selection
-    if [[ "${selection}" == "q" ]]; then
-        echo "Goodbye!"
-        exit 0
-    elif [[ "${selection}" == "1" && "${current_dir}" != "${username}" ]]; then
-        local parent_dir=$(dirname "${current_dir}")
-        traverse_repos "${parent_dir}" "${path}"
-    elif [[ "${selection}" -ge "1" && "${selection}" -le "${repo_index}" ]]; then
-        local selected_repo="${repo_array[${selection}]}"
-        traverse_repos "${selected_repo}" "${current_path}"
-    elif [[ "${selection}" -gt "${repo_index}" && "${selection}" -le "$((${repo_index} + ${file_index}))" ]]; then
-        local selected_file="${file_array[$((${selection} - ${repo_index}))]}"
-        local file_path="${current_path}/${selected_file}"
-        read -p "You've selected ${file_path}. Would you like to download and run this file? (y/n): " confirm
-        if [[ "${confirm}" == "y" ]]; then
-            curl -O "${raw_base}/${path}/${selected_file}"
-            chmod +x "${selected_file}"
-            ./"${selected_file}"
-        fi
+# Define function to handle user input
+function handle_input {
+  local input=$1
+  if [[ $input == "b" ]]; then
+    # Move back one directory
+    path=$(dirname "$path")
+  elif [[ $input =~ ^[0-9]+$ ]]; then
+    # Check if selection is a directory
+    local selection=${choices[$input]}
+    local selection_url=${urls[$input]}
+    if [[ $selection == */ ]]; then
+      # Move into selected directory
+      path=$path/$selection
+      # Download HTML content of selected directory
+      local content=$(curl -s $selection_url)
+      # Parse links to find subdirectories and files
+      parse_links "$content"
     else
-        echo "Invalid selection. Please try again."
+      # Download selected file
+      echo "Downloading $selection..."
+      curl -O $selection_url
+      # Make file executable
+      chmod +x $selection
+      # Ask if user wants to run file now
+      read -p "Do you want to run $selection now? (y/n): " choice
+      case "$choice" in 
+        y|Y ) ./$selection;;
+        n|N ) echo "Okay, exiting...";;
+        * ) echo "Invalid choice. Exiting...";;
+      esac
+      # Move back to previous directory
+      path=$(dirname "$path")
     fi
+  else
+    echo "Invalid input, please try again."
+  fi
 }
 
-# Traverse the top-level directory to begin
-traverse_repos "${username}" "${username}"
+# Define function to parse links in HTML content
+function parse_links {
+  local content=$1
+  # Clear arrays
+  unset choices urls
+  # Find links to subdirectories and files
+  local links=$(echo "$content" | grep -Eo 'href="[^"]+"' | cut -d'"' -f2)
+  for link in $links; do
+    if [[ $link == */ ]]; then
+      # Add subdirectory to choices array
+      choices+=("${link%/}/")
+      urls+=("$path/$link")
+    elif [[ $link == *.sh ]]; then
+      # Add script file to choices array
+      choices+=("$link")
+      urls+=("$path/$link")
+    fi
+  done
+}
+
+# Set default username
+username="baybled"
+# Set starting path
+path="https://github.com/$username"
+
+echo "Welcome to the Github Repository Browser!"
+echo "Type the number of a choice to navigate or 'b' to go back."
+echo
+
+while true; do
+  # Download HTML content of current directory
+  local content=$(curl -s $path)
+  # Parse links to find subdirectories and files
+  parse_links "$content"
+  # Print current location
+  echo "Current Location: ${path#https://github.com/}"
+  # Print choices
+  for i in "${!choices[@]}"; do
+    echo "[$i] ${choices[$i]}"
+  done
+  # Get user input
+  read -p "Enter selection: " input
+  # Handle user input
+  handle_input "$input"
+done
